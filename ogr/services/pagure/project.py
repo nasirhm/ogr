@@ -22,6 +22,7 @@
 
 import logging
 from typing import List, Optional, Dict, Set
+from urllib.parse import urlparse
 
 from ogr.abstract import PRStatus, GitTag, CommitFlag, CommitComment, CommitStatus
 from ogr.abstract import PullRequest, Issue, IssueStatus, Release
@@ -64,7 +65,10 @@ class PagureProject(BaseGitProject):
         self.namespace = namespace
 
     def __str__(self) -> str:
-        return f'PagureProject(namespace="{self.namespace}", repo="{self.repo}")'
+        fork_info = ""
+        if self._is_fork:
+            fork_info = f', username="{self._username}", is_fork={self._is_fork}'
+        return f'PagureProject(namespace="{self.namespace}", repo="{self.repo}"{fork_info})'
 
     def __eq__(self, o: object) -> bool:
         if not isinstance(o, PagureProject):
@@ -200,9 +204,10 @@ class PagureProject(BaseGitProject):
         status: IssueStatus = IssueStatus.open,
         author: Optional[str] = None,
         assignee: Optional[str] = None,
+        labels: Optional[List[str]] = None,
     ) -> List[Issue]:
         return PagureIssue.get_list(
-            project=self, status=status, author=author, assignee=assignee
+            project=self, status=status, author=author, assignee=assignee, labels=labels
         )
 
     def get_issue(self, issue_id: int) -> Issue:
@@ -290,6 +295,27 @@ class PagureProject(BaseGitProject):
     def exists(self):
         response = self._call_project_api_raw()
         return response.ok
+
+    def is_private(self) -> bool:
+        """
+        Is this repo private? (accessible only by users with granted access)
+
+        :return: if yes, return True
+        """
+        host = urlparse(self.service.instance_url).hostname
+        if host in [
+            "git.centos.org",
+            "git.stg.centos.org",
+            "pagure.io",
+            "src.fedoraproject.org",
+            "src.stg.fedoraproject.org",
+        ]:
+            # private repositories are not allowed on generally used pagure instances
+            return False
+        raise NotImplementedError(
+            f"is_private is not implemented for {self.service.instance_url}."
+            f"Please open issue in https://github.com/packit-service/ogr"
+        )
 
     def is_forked(self) -> bool:
         """

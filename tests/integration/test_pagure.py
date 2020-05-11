@@ -1,34 +1,25 @@
 import os
-import unittest
+from datetime import datetime
 
 import pytest
-
 from requre.storage import PersistentObjectStorage
 from requre.utils import StorageMode
+from requre import RequreTestCase
 
 from ogr import PagureService
 from ogr.abstract import PRStatus, IssueStatus, CommitStatus
 from ogr.exceptions import PagureAPIException, OgrException
 
-DATA_DIR = "test_data"
-PERSISTENT_DATA_PREFIX = os.path.join(
-    os.path.dirname(os.path.realpath(__file__)), DATA_DIR
-)
 
-
-class PagureTests(unittest.TestCase):
+class PagureTests(RequreTestCase):
     def setUp(self):
+        super().setUp()
         self.token = os.environ.get("PAGURE_TOKEN")
-        test_name = self.id() or "all"
-        self.persistent_data_file = os.path.join(
-            PERSISTENT_DATA_PREFIX, f"test_pagure_data_{test_name}.yaml"
-        )
-
-        PersistentObjectStorage().mode = StorageMode.default
-        PersistentObjectStorage().storage_file = self.persistent_data_file
 
         if PersistentObjectStorage().mode == StorageMode.write and (not self.token):
-            raise EnvironmentError("please set PAGURE_TOKEN env variables")
+            raise EnvironmentError(
+                "You are in Requre write mode, please set PAGURE_TOKEN env variables"
+            )
 
         self.service = PagureService(token=self.token, instance_url="https://pagure.io")
         self._user = None
@@ -56,9 +47,6 @@ class PagureTests(unittest.TestCase):
                 namespace=None, repo="ogr-tests", username=self.user, is_fork=True
             )
         return self._ogr_fork
-
-    def tearDown(self):
-        PersistentObjectStorage().dump()
 
 
 class Comments(PagureTests):
@@ -238,6 +226,19 @@ class Service(PagureTests):
 
 
 class Issues(PagureTests):
+    def setUp(self):
+        super().setUp()
+        self._long_issues_project = None
+
+    @property
+    def long_issues_project(self):
+        if not self._long_issues_project:
+            self._long_issues_project = self.service.get_project(
+                repo="pagure", namespace=None
+            )
+
+        return self._long_issues_project
+
     def test_issue_list(self):
         issue_list = self.ogr_project.get_issue_list()
         assert isinstance(issue_list, list)
@@ -245,6 +246,11 @@ class Issues(PagureTests):
         issue_list = self.ogr_project.get_issue_list(status=IssueStatus.all)
         assert issue_list
         assert len(issue_list) >= 2
+
+    def test_issue_list_paginated(self):
+        issue_list = self.long_issues_project.get_issue_list()
+        assert issue_list
+        assert len(issue_list) >= 400
 
     def test_issue_list_author(self):
         issue_list = self.ogr_project.get_issue_list(
@@ -262,6 +268,13 @@ class Issues(PagureTests):
     def test_issue_list_assignee(self):
         issue_list = self.ogr_project.get_issue_list(
             status=IssueStatus.all, assignee="mfocko"
+        )
+        assert issue_list
+        assert len(issue_list) == 1
+
+    def test_issue_list_labels(self):
+        issue_list = self.ogr_project.get_issue_list(
+            status=IssueStatus.all, labels=["test_label"]
         )
         assert issue_list
         assert len(issue_list) == 1
@@ -297,6 +310,47 @@ class PullRequests(PagureTests):
         assert pr_info.title.startswith("Test PR")
         assert pr_info.description.endswith("merged prs")
         assert pr_info.status == PRStatus.merged
+        assert pr_info.url == "https://pagure.io/ogr-tests/pull-request/5"
+        assert (
+            pr_info.diff_url
+            == "https://pagure.io/ogr-tests/pull-request/5#request_diff"
+        )
+        assert pr_info.head_commit == "517121273b142293807606dbd7a2e0f514b21cc8"
+
+    def test_set_pr_flag(self):
+        # https://pagure.io/ogr-tests/pull-request/6
+        pr = self.ogr_project.get_pr(pr_id=6)
+        response = pr.set_flag(
+            username="packit/build",
+            comment="A simple RPM build.",
+            url="https://packit.dev",
+            status=CommitStatus.success,
+            uid="553fa0c52d0367d778458af022ac8a9d",
+        )
+        assert response["uid"] == "553fa0c52d0367d778458af022ac8a9d"
+
+    def test_head_commit(self):
+        assert (
+            self.ogr_project.get_pr(4).head_commit
+            == "1b491a6718ca39c249e4e15a1b9d74fb2ff9d90a"
+        )
+        assert (
+            self.ogr_project.get_pr(5).head_commit
+            == "517121273b142293807606dbd7a2e0f514b21cc8"
+        )
+
+    def test_source_project_upstream_branch(self):
+        pr = self.ogr_project.get_pr(4)
+        source_project = pr.source_project
+        assert source_project.namespace is None
+        assert source_project.repo == "ogr-tests"
+
+    def test_source_project_upstream_fork(self):
+        pr = self.ogr_project.get_pr(6)
+        source_project = pr.source_project
+        assert source_project.namespace is None
+        assert source_project.repo == "ogr-tests"
+        assert source_project.full_repo_name == "fork/mfocko/ogr-tests"
 
 
 class Forks(PagureTests):
@@ -314,6 +368,11 @@ class Forks(PagureTests):
         assert fork.is_fork
         urls = fork.get_git_urls()
         assert "{username}" not in urls["ssh"]
+
+    def test_fork_in_str(self):
+        str_representation = str(self.ogr_fork)
+        assert 'username="' in str_representation
+        assert "is_fork=True" in str_representation
 
     def test_nonexisting_fork(self):
         ogr_project_non_existing_fork = self.service.get_project(
@@ -357,13 +416,8 @@ class Forks(PagureTests):
 
 class PagureProjectTokenCommands(PagureTests):
     def setUp(self):
-        self.token = os.environ.get("PAGURE_OGR_TEST_TOKEN")
-        test_name = self.id() or "all"
-        self.persistent_data_file = os.path.join(
-            PERSISTENT_DATA_PREFIX, f"test_pagure_data_{test_name}.yaml"
-        )
-
-        PersistentObjectStorage().storage_file = self.persistent_data_file
+        super().setUp()
+        self.token = os.environ.get("PAGURE_OGR_TEST_TOKEN", "")
 
         if PersistentObjectStorage().mode == StorageMode.write and (not self.token):
             raise EnvironmentError("please set PAGURE_OGR_TEST_TOKEN env variables")
@@ -411,6 +465,26 @@ class PagureProjectTokenCommands(PagureTests):
         )
         assert len(issue_comments) == 2
         assert issue_comments[0].body.startswith("regex")
+
+    def test_issue_update_title(self):
+        issue = self.ogr_project.get_issue(3)
+        old_title, old_description = issue.title, issue.description
+
+        issue.title = "testing title"
+        assert (issue.title, issue.description) == ("testing title", old_description)
+
+        issue.title = old_title
+        assert (issue.title, issue.description) == (old_title, old_description)
+
+    def test_issue_update_description(self):
+        issue = self.ogr_project.get_issue(3)
+        old_title, old_description = issue.title, issue.description
+
+        issue.description = "testing description"
+        assert (issue.title, issue.description) == (old_title, "testing description")
+
+        issue.description = old_description
+        assert (issue.title, issue.description) == (old_title, old_description)
 
     def test_update_pr_info(self):
         pr_info = self.ogr_project.get_pr_info(pr_id=4)
@@ -489,3 +563,26 @@ class PagureProjectTokenCommands(PagureTests):
         assert statuses
         assert len(statuses) >= 0
         assert statuses[-1].state == CommitStatus.success
+        assert statuses[-1].created == datetime(
+            year=2019, month=12, day=2, hour=13, minute=16, second=11
+        )
+        assert statuses[-1].edited == datetime(
+            year=2019, month=12, day=2, hour=13, minute=16, second=11
+        )
+
+    def test_is_private(self):
+        self.service.instance_url = "https://src.fedoraproject.org"
+        assert not self.ogr_project.is_private()
+
+    def test_token_is_none_then_set(self):
+        token = self.service._token
+        self.service.change_token("")
+        try:
+            with pytest.raises(PagureAPIException) as exc:
+                self.service.user.get_username()
+            assert "Invalid or expired token" in str(exc)
+        finally:
+            self.service.change_token(token)
+
+        self.service.user.get_username()
+        self.service.user.get_username()  # 2nd identical call

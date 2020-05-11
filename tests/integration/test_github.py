@@ -1,34 +1,26 @@
 import os
 import unittest
+from datetime import datetime
 
 import pytest
 from github import GithubException, UnknownObjectException
+from requre import RequreTestCase
+from requre.storage import PersistentObjectStorage
+from requre.utils import StorageMode
 
 from ogr import GithubService
 from ogr.abstract import PRStatus, IssueStatus, CommitStatus
 from ogr.exceptions import GithubAPIException
-from requre.storage import PersistentObjectStorage
-from requre.utils import StorageMode
-
-DATA_DIR = "test_data"
-PERSISTENT_DATA_PREFIX = os.path.join(
-    os.path.dirname(os.path.realpath(__file__)), DATA_DIR
-)
 
 
-class GithubTests(unittest.TestCase):
+class GithubTests(RequreTestCase):
     def setUp(self):
+        super().setUp()
         self.token = os.environ.get("GITHUB_TOKEN")
-        test_name = self.id() or "all"
-
-        persistent_data_file = os.path.join(
-            PERSISTENT_DATA_PREFIX, f"test_github_data_{test_name}.yaml"
-        )
-        PersistentObjectStorage().mode = StorageMode.default
-        PersistentObjectStorage().storage_file = persistent_data_file
-
         if PersistentObjectStorage().mode == StorageMode.write and (not self.token):
-            raise EnvironmentError("please set GITHUB_TOKEN env variables")
+            raise EnvironmentError(
+                "You are in Requre write mode, please set proper GITHUB_TOKEN env variables"
+            )
 
         self.service = GithubService(token=self.token)
         self._ogr_project = None
@@ -67,9 +59,6 @@ class GithubTests(unittest.TestCase):
                 namespace="fedora-modularity", repo="fed-to-brew"
             )
         return self._not_forked_project
-
-    def tearDown(self):
-        PersistentObjectStorage().dump()
 
 
 class Comments(GithubTests):
@@ -297,6 +286,9 @@ class GenericCommands(GithubTests):
 
         issue = self.ogr_project.get_issue_info(4)
         assert self.ogr_project.can_close_issue("lachmanfrantisek", issue)
+
+    def test_issue_permissions_cant_close(self):
+        issue = self.ogr_project.get_issue_info(4)
         assert not self.ogr_project.can_close_issue("unknown_user", issue)
 
     def test_pr_permissions(self):
@@ -319,12 +311,23 @@ class GenericCommands(GithubTests):
         assert status.comment == "testing description"
 
     def test_get_commit_statuses(self):
-        statuses = self.ogr_project.get_commit_statuses(
-            commit="c891a9e4ac01e6575f3fd66cf1b7db2f52f10128"
-        )
+        commit = "c891a9e4ac01e6575f3fd66cf1b7db2f52f10128"
+        statuses = self.ogr_project.get_commit_statuses(commit=commit)
         assert statuses
         assert len(statuses) >= 26
-        assert statuses[-1].comment.startswith("Testing the trimming")
+        last_flag = statuses[-1]
+        assert last_flag.comment.startswith("Testing the trimming")
+        assert last_flag.url == "https://github.com/packit-service/ogr"
+        assert last_flag.commit == commit
+        assert last_flag.state == CommitStatus.success
+        assert last_flag.context == "test"
+        assert last_flag.uid
+        assert last_flag.created == datetime(
+            year=2019, month=9, day=19, hour=12, minute=21, second=6
+        )
+        assert last_flag.edited == datetime(
+            year=2019, month=9, day=19, hour=12, minute=21, second=6
+        )
 
     def test_set_commit_status_long_description(self):
         long_description = (
@@ -358,6 +361,16 @@ class GenericCommands(GithubTests):
 
     def test_full_repo_name(self):
         assert self.ogr_project.full_repo_name == "packit-service/ogr"
+
+    def test_is_not_private(self):
+        # when regenerating this test with your gitlab token, use your own private repository
+        private_project = self.service.get_project(
+            namespace="dhodovsk", repo="playground"
+        )
+        assert private_project.is_private()
+
+    def test_is_private(self):
+        assert not self.ogr_project.is_private()
 
 
 class Issues(GithubTests):
@@ -397,6 +410,13 @@ class Issues(GithubTests):
         )
         assert issue_list
         assert len(issue_list) >= 10
+
+    def test_issue_list_labels(self):
+        issue_list = self.ogr_project.get_issue_list(
+            status=IssueStatus.all, labels=["Pagure"]
+        )
+        assert issue_list
+        assert len(issue_list) >= 42
 
     def test_issue_info(self):
         issue_info = self.ogr_project.get_issue_info(issue_id=4)
@@ -501,6 +521,8 @@ class PullRequests(GithubTests):
         assert pr_info.title == "WIP: API"
         assert pr_info.status == PRStatus.merged
         assert pr_info.author == "lachmanfrantisek"
+        assert pr_info.url == "https://github.com/packit-service/ogr/pull/1"
+        assert pr_info.diff_url == "https://github.com/packit-service/ogr/pull/1/files"
 
     def test_all_pr_commits(self):
         commits = self.ogr_project.get_all_pr_commits(pr_id=1)
@@ -663,6 +685,62 @@ class PullRequests(GithubTests):
 
         pr.description = old_description
         assert pr.description == old_description
+
+    def test_head_commit(self):
+        assert (
+            self.hello_world_project.get_pr(111).head_commit
+            == "1abb19255a7c1bec7ffcae2487f022b23175af2b"
+        )
+        assert (
+            self.hello_world_project.get_pr(112).head_commit
+            == "9ab13fa4b4944510022730708045f42aea106cef"
+        )
+        assert (
+            self.hello_world_project.get_pr(113).head_commit
+            == "7cf6d0cbeca285ecbeb19a0067cb243783b3c768"
+        )
+
+    def test_source_project_upstream_branch(self):
+        pr = self.hello_world_project.get_pr(72)
+        source_project = pr.source_project
+        assert source_project.namespace == "packit-service"
+        assert source_project.repo == "hello-world"
+
+    def test_source_project_upstream_fork(self):
+        pr = self.hello_world_project.get_pr(111)
+        source_project = pr.source_project
+        assert source_project.namespace == "lbarcziova"
+        assert source_project.repo == "hello-world"
+
+    def test_source_project_fork_fork(self):
+        project = self.service.get_project(repo="hello-world", namespace="mfocko")
+        pr = project.get_pr(1)
+        source_project = pr.source_project
+        assert source_project.namespace == "mfocko"
+        assert source_project.repo == "hello-world"
+
+    def test_source_project_other_fork_fork(self):
+        project = self.service.get_project(
+            repo="hello-world", namespace="lachmanfrantisek"
+        )
+        pr = project.get_pr(1)
+        source_project = pr.source_project
+        assert source_project.namespace == "mfocko"
+        assert source_project.repo == "hello-world"
+
+    def test_source_project_renamed_fork(self):
+        pr = self.hello_world_project.get_pr(113)
+        source_project = pr.source_project
+        assert source_project.namespace == "mfocko"
+        assert source_project.repo == "bye-world"
+
+    def test_source_project_renamed_upstream(self):
+        pr = self.service.get_project(
+            repo="not-potential-spoon", namespace="packit-service"
+        ).get_pr(1)
+        source_project = pr.source_project
+        assert source_project.namespace == "mfocko"
+        assert source_project.repo == "potential-spoon"
 
 
 class Releases(GithubTests):

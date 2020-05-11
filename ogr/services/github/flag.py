@@ -19,6 +19,7 @@
 # LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 # OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 # SOFTWARE.
+import datetime
 import warnings
 from typing import List, Union
 
@@ -43,6 +44,8 @@ class GithubCommitFlag(CommitFlag):
         self.state = self._state_from_str(self._raw_commit_flag.state)
         self.context = self._raw_commit_flag.context
         self.comment = self._raw_commit_flag.description
+        self.url = self._raw_commit_flag.target_url
+        self.uid = self._raw_commit_flag.id
 
     @staticmethod
     def get(project: "ogr_github.GithubProject", commit: str) -> List["CommitFlag"]:
@@ -50,7 +53,9 @@ class GithubCommitFlag(CommitFlag):
 
         try:
             return [
-                GithubCommitFlag(raw_commit_flag=raw_status, project=project)
+                GithubCommitFlag(
+                    raw_commit_flag=raw_status, project=project, commit=commit
+                )
                 for raw_status in statuses
             ]
         except UnknownObjectException:
@@ -81,3 +86,11 @@ class GithubCommitFlag(CommitFlag):
             state.name, target_url, description, context
         )
         return GithubCommitFlag(project=project, raw_commit_flag=status, commit=commit)
+
+    @property
+    def created(self) -> datetime.datetime:
+        return self._raw_commit_flag.created_at
+
+    @property
+    def edited(self) -> datetime.datetime:
+        return self._raw_commit_flag.updated_at

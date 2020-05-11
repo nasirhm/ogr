@@ -1,3 +1,85 @@
+# 0.12.0
+
+## New Features
+
+- PullRequest now has `source_project`/`target_project` (read-only) properties. (@mfocko)
+- GitHub and GitLab now have `head_commit` on PullRequests implemented as well. (@mfocko)
+
+## Minor
+
+- Add git.centos.org to the instances that do not have private repositories. (@csomh)
+
+## Fixes
+
+- Creating PRs to fork now work on GitHub. (@saisankargochhayat)
+
+# 0.11.3
+
+## New Features
+
+- You can now set a title and a description for PagureIssue.
+
+## Fixes
+
+- GitLab classes can now process more than 20 objects (ogr now plays well with the GitLab's pagination mechanism).
+- ogr no longer uses backticks in error messages related to Pagure (so they can be displayed nicely in markdown formatting).
+
+## Internals
+
+- Since [rpmautospec](https://docs.pagure.org/Fedora-Infra.rpmautospec/principle.html) is deployed in staging environment only, we have reverted the related changes.
+
+# 0.11.2
+
+## New Features
+
+- A new method to set flags on Pagure PRs was added. (@csomh)
+  - It is Pagure-specific.
+  - Other git-forges do not have this as they display the flags of the head commit on PRs.
+- CommitFlag now has created/edited properties. (@TomasJani)
+
+## Minor
+
+- Pagure service is used for CentOS prod/stg instances by default. (@jsakalos)
+- We now forward the specific errors from the Pagure API. (@TomasTomecek)
+
+## Fixes
+
+- Pagination of PR comments on Pagure was fixed. (@AdarLavi)
+
+## Internals
+
+- Tests were removed from the zuul gating pipeline. (@lbarcziova)
+- We now use [rpmautospec] for generating changelogs in Fedora. (@TomasTomecek)
+
+[rpmautospec]: https://pagure.io/Fedora-Infra/rpmautospec
+
+# 0.11.1
+
+## New Features
+
+- Added head_commit property to PagurePullrequest. (@jsakalos)
+
+## Fixes
+
+- Packit rev-dep tests were refactored. (@lbarcziova)
+- Descriptions in playbooks were fixed. (@lbarcziova)
+- GitHubProject raises exception in case of missing install id . (@ttomecek)
+
+# 0.11.0
+
+## New Features
+
+- Creating of Pagure issues now supports tags. (@cverna)
+- Project issues can now be filtered by labels. (@cverna)
+- GitProject has new is_private() method. (@dhodovsk)
+- Tokens & keys are now obfuscated in logs. (@lachmanfrantisek)
+- PR classes now have diff_url property. (@pawelkopka)
+
+## Fixes
+
+- Trailing slash from URLs is now removed before parsing. (@nickcannariato)
+- Getting of projects defined with SSH URLs is fixed. (@TomasTomecek)
+
 # 0.10.0
 
 ## New Features

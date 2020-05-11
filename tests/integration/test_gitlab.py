@@ -1,33 +1,26 @@
 import os
-import unittest
+from datetime import datetime
 
 import pytest
 from gitlab import GitlabGetError
-
-from ogr.exceptions import GitlabAPIException
+from requre import RequreTestCase
 from requre.storage import PersistentObjectStorage
 from requre.utils import StorageMode
+
 from ogr.abstract import PRStatus, IssueStatus, CommitStatus
+from ogr.exceptions import GitlabAPIException, OperationNotSupported
 from ogr.services.gitlab import GitlabService
 
-DATA_DIR = "test_data"
-PERSISTENT_DATA_PREFIX = os.path.join(
-    os.path.dirname(os.path.realpath(__file__)), DATA_DIR
-)
 
-
-class GitlabTests(unittest.TestCase):
+class GitlabTests(RequreTestCase):
     def setUp(self):
+        super().setUp()
         self.token = os.environ.get("GITLAB_TOKEN")
-        test_name = self.id() or "all"
 
-        persistent_data_file = os.path.join(
-            PERSISTENT_DATA_PREFIX, f"test_gitlab_data_{test_name}.yaml"
-        )
-        PersistentObjectStorage().mode = StorageMode.default
-        PersistentObjectStorage().storage_file = persistent_data_file
         if PersistentObjectStorage().mode == StorageMode.write and not self.token:
-            raise EnvironmentError("please set GITLAB_TOKEN env variables")
+            raise EnvironmentError(
+                "You are in Requre write mode, please set GITLAB_TOKEN env variables"
+            )
         elif not self.token:
             self.token = "some_token"
 
@@ -39,15 +32,19 @@ class GitlabTests(unittest.TestCase):
             repo="ogr-tests", namespace="packit-service"
         )
 
-    def tearDown(self):
-        PersistentObjectStorage().dump()
-
 
 class GenericCommands(GitlabTests):
     def test_branches(self):
         branches = self.project.get_branches()
         assert branches
         assert "master" in branches
+
+    def test_branches_pagination(self):
+        # in time of writing tests using gnuwget/wget2 (28 branches)
+        wget_project = self.service.get_project(repo="wget2", namespace="gnuwget")
+        branches = wget_project.get_branches()
+        assert branches
+        assert len(branches) > 20
 
     def test_get_file(self):
         file_content = self.project.get_file_content("README.md")
@@ -116,6 +113,15 @@ class GenericCommands(GitlabTests):
         assert flags[0].state == CommitStatus.success
         assert flags[0].comment == "testing status"
         assert flags[0].context == "default"
+        assert flags[0].created == datetime(
+            year=2019,
+            month=9,
+            day=18,
+            hour=14,
+            minute=16,
+            second=48,
+            microsecond=424000,
+        )
 
     def test_set_commit_status(self):
         old_statuses = self.project.get_commit_statuses(
@@ -171,6 +177,14 @@ class GenericCommands(GitlabTests):
 
         assert self.project.can_merge_pr("lachmanfrantisek")
         assert not self.project.can_merge_pr("not_existing_user")
+
+    def test_is_private(self):
+        # when regenerating this test with your gitlab token, use your own private repository
+        private_project = self.service.get_project(namespace="dhodovsk", repo="bekacky")
+        assert private_project.is_private()
+
+    def test_is_not_private(self):
+        assert not self.project.is_private()
 
 
 class Issues(GitlabTests):
@@ -272,6 +286,13 @@ class Issues(GitlabTests):
         assert labels[0] == "test_lb1"
         assert labels[1] == "test_lb2"
 
+    def test_issue_list_labels(self):
+        issue_list = self.project.get_issue_list(
+            status=IssueStatus.all, labels=["testing-label-for-test-issue-list-labels"]
+        )
+        assert issue_list
+        assert len(issue_list) == 33
+
     def test_get_issue_comments_author_regex(self):
         comments = self.project.get_issue_comments(
             issue_id=2, filter_regex="2$", author="lbarcziova"
@@ -340,6 +361,14 @@ class PullRequests(GitlabTests):
         assert pr_info
         assert pr_info.title == "change"
         assert pr_info.description == "description of mergerequest"
+        assert (
+            pr_info.url
+            == "https://gitlab.com/packit-service/ogr-tests/merge_requests/1"
+        )
+        assert (
+            pr_info.diff_url
+            == "https://gitlab.com/packit-service/ogr-tests/merge_requests/1/diffs"
+        )
 
     def test_get_all_pr_commits(self):
         commits = self.project.get_all_pr_commits(pr_id=1)
@@ -460,6 +489,62 @@ class PullRequests(GitlabTests):
         pr.description = old_description
         assert pr.description == old_description
 
+    def test_head_commit(self):
+        assert (
+            self.project.get_pr(12).head_commit
+            == "2543f1728c7e1c2b8772d0dc11dc8b1870f4db60"
+        )
+        assert (
+            self.project.get_pr(1).head_commit
+            == "d490ec67dd98f69dfdc1732b98bb3189f0e0aace"
+        )
+        assert (
+            self.project.get_pr(19).head_commit
+            == "59b1a9bab5b5198c619270646410867788685c16"
+        )
+
+    def test_source_project_upstream_branch(self):
+        pr = self.project.get_pr(23)
+        source_project = pr.source_project
+        assert source_project.namespace == "packit-service"
+        assert source_project.repo == "ogr-tests"
+
+    def test_source_project_upstream_fork(self):
+        pr = self.project.get_pr(22)
+        source_project = pr.source_project
+        assert source_project.namespace == "mfocko"
+        assert source_project.repo == "ogr-tests"
+
+    def test_source_project_fork_fork(self):
+        project = self.service.get_project(repo="ogr-tests", namespace="mfocko")
+        pr = project.get_pr(1)
+        source_project = pr.source_project
+        assert source_project.namespace == "mfocko"
+        assert source_project.repo == "ogr-tests"
+
+    def test_source_project_other_fork_fork(self):
+        project = self.service.get_project(
+            repo="ogr-tests", namespace="lachmanfrantisek"
+        )
+        pr = project.get_pr(1)
+        source_project = pr.source_project
+        assert source_project.namespace == "mfocko"
+        assert source_project.repo == "ogr-tests"
+
+    def test_source_project_renamed_fork(self):
+        pr = self.project.get_pr(24)
+        source_project = pr.source_project
+        assert source_project.namespace == "mfocko"
+        assert source_project.repo == "definitely-not-ogr-tests"
+
+    def test_source_project_renamed_upstream(self):
+        pr = self.service.get_project(
+            repo="old-ogr-testing-repo-in-the-group", namespace="packit-service"
+        ).get_pr(1)
+        source_project = pr.source_project
+        assert source_project.namespace == "mfocko"
+        assert source_project.repo == "new-ogr-testing-repo-in-the-group"
+
 
 class Tags(GitlabTests):
     def test_get_tags(self):
@@ -476,7 +561,10 @@ class Tags(GitlabTests):
 
 class Releases(GitlabTests):
     def test_create_release(self):
-        releases_before = self.project.get_releases()
+        try:
+            releases_before = self.project.get_releases()
+        except OperationNotSupported:
+            self.skipTest("This version of python-gitlab does not support releases.")
         version_list = releases_before[0].tag_name.rsplit(".", 1)
         increased = ".".join([version_list[0], str(int(version_list[1]) + 1)])
         count_before = len(releases_before)
@@ -493,7 +581,10 @@ class Releases(GitlabTests):
         assert count_before + 1 == count_after
 
     def test_get_releases(self):
-        releases = self.project.get_releases()
+        try:
+            releases = self.project.get_releases()
+        except OperationNotSupported:
+            self.skipTest("This version of python-gitlab does not support releases.")
         assert releases
         count = len(releases)
         assert count >= 1
@@ -501,8 +592,21 @@ class Releases(GitlabTests):
         assert releases[-1].tag_name == "0.1.0"
         assert releases[-1].body == "testing release"
 
+    def test_get_releases_pagination(self):
+        # in time of writing tests using graphviz/graphviz (60 releases)
+        graphviz = self.service.get_project(repo="graphviz", namespace="graphviz")
+        try:
+            releases = graphviz.get_releases()
+        except OperationNotSupported:
+            self.skipTest("This version of python-gitlab does not support releases.")
+        assert releases
+        assert len(releases) > 20
+
     def test_get_latest_release(self):
-        release = self.project.get_releases()[0]
+        try:
+            release = self.project.get_releases()[0]
+        except OperationNotSupported:
+            self.skipTest("This version of python-gitlab does not support releases.")
         latest_release = self.project.get_latest_release()
         assert latest_release.title == release.title
         assert latest_release.tag_name == release.tag_name
@@ -573,7 +677,10 @@ class Forks(GitlabTests):
         """
         Remove https://gitlab.com/$USERNAME/ogr-tests before data regeneration
         """
-        not_existing_fork = self.project.get_fork(create=False)
+        try:
+            not_existing_fork = self.project.get_fork(create=False)
+        except OperationNotSupported:
+            self.skipTest("This python-gitlab malfunctions on listing forks.")
         assert not not_existing_fork
         assert not self.project.is_forked()
 

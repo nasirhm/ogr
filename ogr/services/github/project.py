@@ -43,7 +43,7 @@ from ogr.abstract import (
     CommitFlag,
     CommitStatus,
 )
-from ogr.exceptions import GithubAPIException
+from ogr.exceptions import GithubAPIException, OgrException
 from ogr.read_only import if_readonly, GitProjectReadOnly
 from ogr.services import github as ogr_github
 from ogr.services.base import BaseGitProject
@@ -88,6 +88,11 @@ class GithubProject(BaseGitProject):
                 inst_id = integration.get_installation(
                     self.namespace, self.repo
                 ).id.value
+                if not inst_id:
+                    raise OgrException(
+                        f"No installation ID provided for {self.namespace}/{self.repo}: "
+                        "please make sure that you provided correct credentials of your GitHub app."
+                    )
                 inst_auth = integration.get_access_token(inst_id)
                 self._github_instance = github.Github(login_or_token=inst_auth.token)
             else:
@@ -132,6 +137,14 @@ class GithubProject(BaseGitProject):
             logger.debug(f"Project {self.repo}/{user_login} does not exist: {ex}")
             return None
 
+    def is_private(self) -> bool:
+        """
+        Is this repo private? (accessible only by users with granted access)
+
+        :return: if yes, return True
+        """
+        return self.github_repo.private
+
     def is_forked(self) -> bool:
         """
         Is this repo forked by the authenticated user?
@@ -154,10 +167,11 @@ class GithubProject(BaseGitProject):
         """
         Return parent project if this project is a fork, otherwise return None
         """
-        if self.is_fork:
-            parent = self.github_repo.parent
-            return GithubProject(parent.name, self.service, parent.owner.login)
-        return None
+        return (
+            self.service.get_project_from_github_repository(self.github_repo.parent)
+            if self.is_fork
+            else None
+        )
 
     def get_branches(self) -> List[str]:
         return [branch.name for branch in self.github_repo.get_branches()]
@@ -236,9 +250,10 @@ class GithubProject(BaseGitProject):
         status: IssueStatus = IssueStatus.open,
         author: Optional[str] = None,
         assignee: Optional[str] = None,
+        labels: Optional[List[str]] = None,
     ) -> List[Issue]:
         return GithubIssue.get_list(
-            project=self, status=status, author=author, assignee=assignee
+            project=self, status=status, author=author, assignee=assignee, labels=labels
         )
 
     def get_issue(self, issue_id: int) -> Issue:
@@ -367,15 +382,9 @@ class GithubProject(BaseGitProject):
         :return: fork GithubProject instance
         """
         gh_user = self.github_instance.get_user()
-        fork: Repository = gh_user.create_fork(self.github_repo)
-        project = GithubProject(
-            repo=None, service=self.service, namespace=None, github_repo=fork
+        return self.service.get_project_from_github_repository(
+            gh_user.create_fork(self.github_repo)
         )
-        # we're doing this nonsense b/c you can rename a repo and
-        # github would then return the new name
-        project.repo = project.github_repo.name
-        project.namespace = project.github_repo.owner.login
-        return project
 
     def change_token(self, new_token: str):
         raise NotImplementedError
@@ -547,13 +556,7 @@ class GithubProject(BaseGitProject):
         :return: [PagureProject]
         """
         fork_objects = [
-            GithubProject(
-                repo=fork.name,
-                namespace=fork.owner.login,
-                github_repo=fork,
-                service=self.service,
-                read_only=self.read_only,
-            )
+            self.service.get_project_from_github_repository(fork)
             for fork in self.github_repo.get_forks()
         ]
         return fork_objects

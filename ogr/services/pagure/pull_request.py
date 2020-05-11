@@ -22,20 +22,21 @@
 
 import datetime
 import logging
-from typing import List, Optional, Dict, Any
+from typing import List, Optional, Dict, Any, Union
 
-from ogr.abstract import PRStatus, CommitFlag
+from ogr.abstract import PRStatus, CommitFlag, CommitStatus
 from ogr.abstract import PullRequest, PRComment
 from ogr.exceptions import PagureAPIException
-from ogr.services.base import BasePullRequest
 from ogr.services import pagure as ogr_pagure
+from ogr.services.base import BasePullRequest
 from ogr.services.pagure.comments import PagurePRComment
 
 logger = logging.getLogger(__name__)
 
 
 class PagurePullRequest(BasePullRequest):
-    project: "ogr_pagure.PagureProject"
+    _target_project: "ogr_pagure.PagureProject"
+    _source_project: "ogr_pagure.PagureProject" = None
 
     def __init__(self, raw_pr, project):
         super().__init__(raw_pr, project)
@@ -100,11 +101,38 @@ class PagurePullRequest(BasePullRequest):
     def created(self) -> datetime.datetime:
         return datetime.datetime.fromtimestamp(int(self._raw_pr["date_created"]))
 
+    @property
+    def diff_url(self) -> str:
+        return f"{self.url}#request_diff"
+
+    @property
+    def head_commit(self) -> str:
+        return self._raw_pr["commit_stop"]
+
+    @property
+    def source_project(self) -> "ogr_pagure.PagureProject":
+        if self._source_project is None:
+            source = self._raw_pr["repo_from"]
+            source_project_info = {
+                "repo": source["name"],
+                "namespace": source["namespace"],
+            }
+
+            if source["parent"] is not None:
+                source_project_info["is_fork"] = True
+                source_project_info["username"] = source["user"]["name"]
+
+            self._source_project = self._target_project.service.get_project(
+                **source_project_info
+            )
+
+        return self._source_project
+
     def __str__(self) -> str:
         return "Pagure" + super().__str__()
 
     def __call_api(self, *args, **kwargs) -> dict:
-        return self.project._call_project_api(
+        return self._target_project._call_project_api(
             "pull-request", str(self.id), *args, **kwargs
         )
 
@@ -227,3 +255,43 @@ class PagurePullRequest(BasePullRequest):
     def get_statuses(self) -> List[CommitFlag]:
         self.__update()
         return self.project.get_commit_statuses(self._raw_pr["commit_stop"])
+
+    def set_flag(
+        self,
+        username: str,
+        comment: str,
+        url: str,
+        status: Optional[CommitStatus] = None,
+        percent: Optional[int] = None,
+        uid: Optional[str] = None,
+    ) -> dict:
+        """
+        Set a flag on a pull-request to display results or status of CI tasks.
+
+        See "Flag a pull-request" at
+
+            https://pagure.io/api/0/#pull_requests-tab
+
+        for a full description of the parameters.
+
+        :param username: The name of the application to be presented to users
+                         on the pull request page.
+        :param comment: A short message summarizing the presented results.
+        :param url: A URL to the result of this flag.
+        :param status: The status to be displayed for this flag.
+        :param percent: A percentage of completion compared to the goal.
+        :param uid: A unique identifier used to identify a flag on the pull-request.
+        :return: dict with the response received from Pagure.
+        """
+        data: Dict[str, Union[str, int]] = {
+            "username": username,
+            "comment": comment,
+            "url": url,
+        }
+        if status is not None:
+            data["status"] = status.name
+        if percent is not None:
+            data["percent"] = percent
+        if uid is not None:
+            data["uid"] = uid
+        return self.__call_api("flag", method="POST", data=data)

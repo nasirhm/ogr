@@ -203,6 +203,7 @@ class Issue:
         status: IssueStatus = IssueStatus.open,
         author: Optional[str] = None,
         assignee: Optional[str] = None,
+        labels: Optional[List[str]] = None,
     ) -> List["Issue"]:
         """
         List of issues.
@@ -211,6 +212,7 @@ class Issue:
         :param status: IssueStatus enum
         :param author: str username of author
         :param assignee: str username of assignee
+        :param labels: List[str] list of labels
         :return: [Issue]
         """
         raise NotImplementedError()
@@ -282,7 +284,8 @@ class PullRequest:
     @deprecate_and_set_removal(
         since="0.9.0",
         remove_in="0.14.0 (or 1.0.0 if it comes sooner)",
-        message="Use PullRequestReadOnly from ogr.read_only",
+        message="Use PullRequestReadOnly from ogr.read_only to use a static and offline "
+        "representation of the pull-request. The subclasses of this class are not static anymore.",
     )
     def __init__(
         self,
@@ -310,6 +313,10 @@ class PullRequest:
     def title(self) -> str:
         return self._title
 
+    @title.setter
+    def title(self, new_title: str) -> None:
+        raise NotImplementedError()
+
     @property
     def id(self) -> int:
         return self._id
@@ -325,6 +332,10 @@ class PullRequest:
     @property
     def description(self) -> str:
         return self._description
+
+    @description.setter
+    def description(self, new_description: str) -> None:
+        raise NotImplementedError
 
     @property
     def author(self) -> str:
@@ -346,6 +357,22 @@ class PullRequest:
     def labels(self) -> List[Any]:
         raise NotImplementedError()
 
+    @property
+    def diff_url(self) -> str:
+        raise NotImplementedError()
+
+    @property
+    def head_commit(self) -> str:
+        raise NotImplementedError
+
+    @property
+    def source_project(self) -> "GitProject":
+        raise NotImplementedError()
+
+    @property
+    def target_project(self) -> "GitProject":
+        raise NotImplementedError()
+
     def __str__(self) -> str:
         description = (
             f"{self.description[:10]}..." if self.description is not None else "None"
@@ -356,6 +383,7 @@ class PullRequest:
             f"id={self.id}, "
             f"status='{self.status.name}', "
             f"url='{self.url}', "
+            f"diff_url='{self.diff_url}', "
             f"description='{description}', "
             f"author='{self.author}', "
             f"source_branch='{self.source_branch}', "
@@ -540,8 +568,11 @@ class CommitFlag:
         uid: Optional[str] = None,
         url: Optional[str] = None,
     ) -> None:
+        self.uid = uid
+        self.project = project
+        self.commit = commit
+
         if commit and state and context:
-            self.commit = commit
             self.state = state
             self.context = context
             self.comment = comment
@@ -549,8 +580,6 @@ class CommitFlag:
         else:
             self._raw_commit_flag = raw_commit_flag
             self._from_raw_commit_flag()
-        self.uid = uid
-        self.project = project
 
     def __str__(self) -> str:
         return (
@@ -560,7 +589,9 @@ class CommitFlag:
             f"context='{self.context}', "
             f"uid='{self.uid}',"
             f"comment='{self.comment}',"
-            f"url='{self.url}')"
+            f"url='{self.url}'"
+            f"created='{self.created}'"
+            f"edited='{self.edited}')"
         )
 
     def _state_from_str(self, state: str) -> CommitStatus:
@@ -584,6 +615,14 @@ class CommitFlag:
         description: str,
         context: str,
     ) -> "CommitFlag":
+        raise NotImplementedError()
+
+    @property
+    def created(self) -> datetime.datetime:
+        raise NotImplementedError()
+
+    @property
+    def edited(self) -> datetime.datetime:
         raise NotImplementedError()
 
 
@@ -724,6 +763,14 @@ class GitProject:
         self.repo = repo
         self.namespace = namespace
 
+    def is_private(self) -> bool:
+        """
+        Is this repo private (accessible only by users with permissions)
+
+        :return: if yes, return True
+        """
+        raise NotImplementedError()
+
     def is_forked(self) -> bool:
         """
         Is this repo forked by the authenticated user?
@@ -824,6 +871,7 @@ class GitProject:
         status: IssueStatus = IssueStatus.open,
         author: Optional[str] = None,
         assignee: Optional[str] = None,
+        labels: Optional[List[str]] = None,
     ) -> List["Issue"]:
         """
         List of issues (dics)
@@ -831,6 +879,7 @@ class GitProject:
         :param status: IssueStatus enum
         :param author: str username of author
         :param assignee: str username of assignee
+        :param labels: List[str] list of labels
         :return: [Issue]
         """
         raise NotImplementedError()

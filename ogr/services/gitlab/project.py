@@ -37,7 +37,7 @@ from ogr.abstract import (
     CommitComment,
     CommitStatus,
 )
-from ogr.exceptions import GitlabAPIException
+from ogr.exceptions import GitlabAPIException, OperationNotSupported
 from ogr.services import gitlab as ogr_gitlab
 from ogr.services.base import BaseGitProject
 from ogr.services.gitlab.flag import GitlabCommitFlag
@@ -119,6 +119,14 @@ class GitlabProject(BaseGitProject):
             logger.debug(f"Project {self.repo}/{user_login} does not exist: {ex}")
         return None
 
+    def is_private(self) -> bool:
+        """
+        Is this repo private? (accessible only by users with granted access)
+
+        :return: if yes, return True
+        """
+        return self.gitlab_repo.attributes["visibility"] == "private"
+
     def is_forked(self) -> bool:
         return bool(self._construct_fork_project())
 
@@ -194,11 +202,17 @@ class GitlabProject(BaseGitProject):
             50 => Owner access
         :return: List of usernames
         """
-        return [
-            member.username
-            for member in self.gitlab_repo.members.all(all=True)
-            if member.access_level in access_levels
-        ]
+        response = []
+        for member in self.gitlab_repo.members.all(all=True):
+            if isinstance(member, dict):
+                access_level = member["access_level"]
+                username = member["username"]
+            else:
+                access_level = member.access_level
+                username = member.username
+            if access_level in access_levels:
+                response.append(username)
+        return response
 
     def get_pr_list(self, status: PRStatus = PRStatus.open) -> List["PullRequest"]:
         return GitlabPullRequest.get_list(project=self, status=status)
@@ -318,7 +332,7 @@ class GitlabProject(BaseGitProject):
         self.service.change_token(new_token)
 
     def get_branches(self) -> List[str]:
-        return [branch.name for branch in self.gitlab_repo.branches.list()]
+        return [branch.name for branch in self.gitlab_repo.branches.list(all=True)]
 
     def get_file_content(self, path, ref="master") -> str:
         try:
@@ -354,9 +368,10 @@ class GitlabProject(BaseGitProject):
         status: IssueStatus = IssueStatus.open,
         author: Optional[str] = None,
         assignee: Optional[str] = None,
+        labels: Optional[List[str]] = None,
     ) -> List[Issue]:
         return GitlabIssue.get_list(
-            project=self, status=status, author=author, assignee=assignee
+            project=self, status=status, author=author, assignee=assignee, labels=labels
         )
 
     def get_issue(self, issue_id: int) -> Issue:
@@ -377,7 +392,11 @@ class GitlabProject(BaseGitProject):
         return GitTag(name=git_tag.name, commit_sha=git_tag.commit["id"])
 
     def get_releases(self) -> List[Release]:
-        releases = self.gitlab_repo.releases.list()
+        if not hasattr(self.gitlab_repo, "releases"):
+            raise OperationNotSupported(
+                "This version of python-gitlab does not support release, please upgrade."
+            )
+        releases = self.gitlab_repo.releases.list(all=True)
         return [
             self._release_from_gitlab_object(
                 raw_release=release,
@@ -424,13 +443,22 @@ class GitlabProject(BaseGitProject):
 
         :return: [GitlabProject]
         """
+        try:
+            forks = self.gitlab_repo.forks.list()
+        except KeyError:
+            # > item = self._data[self._current]
+            # > KeyError: 0
+            # looks like some API weirdness
+            raise OperationNotSupported(
+                "Please upgrade python-gitlab to a newer version."
+            )
         fork_objects = [
             GitlabProject(
                 repo=fork.path,
                 namespace=fork.namespace["full_path"],
                 service=self.service,
             )
-            for fork in self.gitlab_repo.forks.list()
+            for fork in forks
         ]
         return fork_objects
 

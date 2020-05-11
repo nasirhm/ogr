@@ -21,9 +21,10 @@
 # SOFTWARE.
 
 import datetime
-from typing import List, Optional
+from typing import List, Optional, Dict, Union, Any, cast
 
 from ogr.abstract import IssueComment, IssueStatus, Issue
+from ogr.exceptions import PagureAPIException
 from ogr.services import pagure as ogr_pagure
 from ogr.services.base import BaseIssue
 from ogr.services.pagure.comments import PagureIssueComment
@@ -46,6 +47,10 @@ class PagureIssue(BaseIssue):
         self.__update()
         return self._raw_issue["title"]
 
+    @title.setter
+    def title(self, new_title: str) -> None:
+        self.__update_info(title=new_title)
+
     @property
     def id(self) -> int:
         return self._raw_issue["id"]
@@ -66,6 +71,10 @@ class PagureIssue(BaseIssue):
         self.__update()
         return self._raw_issue["content"]
 
+    @description.setter
+    def description(self, new_description: str) -> None:
+        self.__update_info(description=new_description)
+
     @property
     def author(self) -> str:
         return self._raw_issue["user"]["name"]
@@ -80,6 +89,24 @@ class PagureIssue(BaseIssue):
 
     def __str__(self) -> str:
         return "Pagure" + super().__str__()
+
+    def __update_info(
+        self, title: Optional[str] = None, description: Optional[str] = None
+    ) -> None:
+        try:
+            data = {
+                "title": title if title is not None else self.title,
+                "issue_content": description
+                if description is not None
+                else self.description,
+            }
+
+            updated_issue = self.project._call_project_api(
+                "issue", str(self.id), method="POST", data=data
+            )
+            self._raw_issue = updated_issue["issue"]
+        except Exception as ex:
+            raise PagureAPIException("there was an error while updating the issue", ex)
 
     @staticmethod
     def create(
@@ -107,14 +134,29 @@ class PagureIssue(BaseIssue):
         status: IssueStatus = IssueStatus.open,
         author: Optional[str] = None,
         assignee: Optional[str] = None,
+        labels: Optional[List[str]] = None,
     ) -> List["Issue"]:
-        payload = {"status": status.name.capitalize()}
+        payload: Dict[str, Union[str, List[str], int]] = {
+            "status": status.name.capitalize(),
+            "page": 1,
+            "per_page": 100,
+        }
         if author:
             payload["author"] = author
         if assignee:
             payload["assignee"] = assignee
+        if labels:
+            payload["tags"] = labels
 
-        raw_issues = project._call_project_api("issues", params=payload)["issues"]
+        raw_issues: List[Any] = []
+
+        while True:
+            issues_info = project._call_project_api("issues", params=payload)
+            raw_issues += issues_info["issues"]
+            if not issues_info["pagination"]["next"]:
+                break
+            payload["page"] = cast(int, payload["page"]) + 1
+
         return [PagureIssue(issue_dict, project) for issue_dict in raw_issues]
 
     def _get_all_comments(self) -> List[IssueComment]:

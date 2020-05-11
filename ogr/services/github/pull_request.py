@@ -34,13 +34,13 @@ from ogr.services import github as ogr_github
 from ogr.services.base import BasePullRequest
 from ogr.services.github.comments import GithubPRComment
 
-
 logger = logging.getLogger(__name__)
 
 
 class GithubPullRequest(BasePullRequest):
     _raw_pr: _GithubPullRequest
-    project: "ogr_github.GithubProject"
+    _target_project: "ogr_github.GithubProject"
+    _source_project: "ogr_github.GithubProject" = None
 
     @property
     def title(self) -> str:
@@ -94,6 +94,23 @@ class GithubPullRequest(BasePullRequest):
     def labels(self) -> List[GithubLabel]:
         return list(self._raw_pr.get_labels())
 
+    @property
+    def diff_url(self) -> str:
+        return f"{self._raw_pr.html_url}/files"
+
+    @property
+    def head_commit(self) -> str:
+        return self._raw_pr.head.sha
+
+    @property
+    def source_project(self) -> "ogr_github.GithubProject":
+        if self._source_project is None:
+            self._source_project = self._target_project.service.get_project_from_github_repository(
+                self._raw_pr.head.repo
+            )
+
+        return self._source_project
+
     def __str__(self) -> str:
         return "Github" + super().__str__()
 
@@ -106,14 +123,16 @@ class GithubPullRequest(BasePullRequest):
         source_branch: str,
         fork_username: str = None,
     ) -> "PullRequest":
+        """
+        The default behavior is the pull request is made to the immediate parent repository
+        if the repository is a forked repository.
+        If you want to create a pull request to the forked repo, please pass
+        the `fork_username` parameter.
+        """
         github_repo = project.github_repo
 
-        if project.is_fork and fork_username:
-            logger.warning(
-                f"{project.full_repo_name} is fork, ignoring fork_username arg"
-            )
-
-        if project.is_fork:
+        if project.is_fork and fork_username is None:
+            logger.warning(f"{project.full_repo_name} is fork, ignoring fork_repo.")
             source_branch = f"{project.namespace}:{source_branch}"
             github_repo = project.parent.github_repo
         elif fork_username:
@@ -180,7 +199,7 @@ class GithubPullRequest(BasePullRequest):
         if not any([commit, filename, row]):
             comment = self._raw_pr.create_issue_comment(body)
         else:
-            github_commit = self.project.github_repo.get_commit(commit)
+            github_commit = self._target_project.github_repo.get_commit(commit)
             comment = self._raw_pr.create_comment(body, github_commit, filename, row)
         return GithubPRComment(parent=self, raw_comment=comment)
 

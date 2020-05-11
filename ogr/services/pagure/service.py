@@ -29,15 +29,17 @@ from ogr.exceptions import PagureAPIException, OgrException
 from ogr.factory import use_for_service
 from ogr.parsing import parse_git_repo
 from ogr.services.base import BaseGitService
-from ogr.utils import RequestResponse
 from ogr.services.pagure.project import PagureProject
 from ogr.services.pagure.user import PagureUser
+from ogr.utils import RequestResponse
 
 logger = logging.getLogger(__name__)
 
 
 @use_for_service("pagure")
 @use_for_service("src.fedoraproject.org")
+@use_for_service("git.stg.centos.org")
+@use_for_service("git.centos.org")
 class PagureService(BaseGitService):
     def __init__(
         self,
@@ -65,12 +67,17 @@ class PagureService(BaseGitService):
         self.header = {"Authorization": "token " + self._token} if self._token else {}
 
     def __str__(self) -> str:
-        token_str = f", token='{self._token}'" if self._token else ""
+        token_str = (
+            f", token='{self._token[:1]}***{self._token[-1:]}'" if self._token else ""
+        )
+        insecure_str = f", insecure=True" if self.insecure else ""
+        readonly_str = f", read_only=True" if self.read_only else ""
+
         str_result = (
             f"PagureService(instance_url='{self.instance_url}'"
-            f"{token_str}, "
-            f"read_only={self.read_only}, "
-            f"insecure={self.insecure})"
+            f"{token_str}"
+            f"{readonly_str}"
+            f"{insecure_str})"
         )
         return str_result
 
@@ -127,7 +134,7 @@ class PagureService(BaseGitService):
                 else None
             )
             raise PagureAPIException(
-                f"Page `{url}` not found when calling Pagure API.",
+                f"Page '{url}' not found when calling Pagure API.",
                 pagure_error=error_msg,
             )
 
@@ -139,14 +146,14 @@ class PagureService(BaseGitService):
             logger.error(response.json_content)
             if "error" in response.json_content:
                 error_msg = response.json_content["error"]
-                error_msg_ext = response.json_content["errors"]
+                error_msg_ext = response.json_content.get("errors", "")
+                msg = f"Pagure API returned an error when calling '{url}': {error_msg}"
+                if error_msg_ext:
+                    msg += f" - {error_msg_ext}"
                 raise PagureAPIException(
-                    f"Pagure API returned an error when calling `{url}`: "
-                    f"{error_msg} - {error_msg_ext}",
-                    pagure_error=error_msg,
-                    pagure_response=response.json_content,
+                    msg, pagure_error=error_msg, pagure_response=response.json_content,
                 )
-            raise PagureAPIException(f"Problem with Pagure API when calling `{url}`")
+            raise PagureAPIException(f"Problem with Pagure API when calling '{url}'")
 
         return response.json_content
 
@@ -161,7 +168,7 @@ class PagureService(BaseGitService):
 
         except requests.exceptions.ConnectionError as er:
             logger.error(er)
-            raise PagureAPIException(f"Cannot connect to url: `{url}`.", er)
+            raise PagureAPIException(f"Cannot connect to url: '{url}'.", er)
         return response
 
     def get_raw_request(
